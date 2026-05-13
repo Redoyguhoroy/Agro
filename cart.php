@@ -1,0 +1,592 @@
+<?php
+session_start();
+if (!isset($_SESSION['user_id'])) {
+    header("Location: index.php");
+    exit;
+}
+
+$conn = new mysqli('localhost', 'root', '', 'agfms');
+if ($conn->connect_error) {
+    die("Connection failed: " . $conn->connect_error);
+}
+
+$user_id = $_SESSION['user_id'];
+$error = '';
+$success = '';
+
+$coupon_discount = 0;
+$coupon_message = '';
+
+/* -------------------- REMOVE PRODUCT -------------------- */
+if (isset($_GET['remove'])) {
+    $remove_id = intval($_GET['remove']);
+
+    $conn->query("DELETE FROM cart 
+                  WHERE buyer_id='$user_id' 
+                  AND product_id='$remove_id'");
+
+    header("Location: cart.php");
+    exit;
+}
+
+/* -------------------- APPLY COUPON -------------------- */
+if (isset($_POST['apply_coupon'])) {
+
+    $coupon = strtoupper(trim($_POST['coupon_code']));
+
+    // Example coupons
+    if ($coupon == "AGRO10") {
+        $_SESSION['coupon_discount'] = 10;
+        $_SESSION['coupon_name'] = $coupon;
+        $coupon_message = "10% discount applied!";
+    }
+    elseif ($coupon == "FARM20") {
+        $_SESSION['coupon_discount'] = 20;
+        $_SESSION['coupon_name'] = $coupon;
+        $coupon_message = "20% discount applied!";
+    }
+    else {
+        $_SESSION['coupon_discount'] = 0;
+        $_SESSION['coupon_name'] = '';
+        $coupon_message = "Invalid coupon code!";
+    }
+}
+
+/* -------------------- HANDLE ORDER -------------------- */
+if (isset($_POST['confirm_order'])) {
+    $delivery_address = $_POST['delivery_address'];
+    $phone_number = $_POST['phone_number'];
+    $payment_method = $_POST['payment_method'];
+    $trx_id = $_POST['trx_id'];
+
+    if (!preg_match("/^[0-9]{11}$/", $phone_number)) {
+        $error = "Invalid phone number. Enter 11 digits.";
+    } elseif (empty($trx_id)) {
+        $error = "Transaction ID is required.";
+    } elseif (isset($_POST['product_ids'])) {
+
+        foreach ($_POST['product_ids'] as $product_id) {
+            $quantity = intval($_POST['quantity'][$product_id]);
+
+            $sql = "INSERT INTO orders (buyer_id, product_id, quantity, delivery_address, phone_number, payment_method, trx_id)
+                    VALUES ('$user_id','$product_id','$quantity','$delivery_address','$phone_number','$payment_method','$trx_id')";
+            
+            if ($conn->query($sql)) {
+                $conn->query("DELETE FROM cart WHERE buyer_id='$user_id' AND product_id='$product_id'");
+            }
+        }
+
+        unset($_SESSION['coupon_discount']);
+        unset($_SESSION['coupon_name']);
+
+        $success = "Order placed successfully!";
+    } else {
+        $error = "Your cart is empty.";
+    }
+}
+
+/* -------------------- FETCH CART ITEMS -------------------- */
+$sql = "SELECT cart.product_id, cart.quantity, marketplace.product_name,
+        marketplace.price, marketplace.product_image
+        FROM cart
+        JOIN marketplace ON cart.product_id = marketplace.product_id
+        WHERE cart.buyer_id='$user_id'";
+
+$result = $conn->query($sql);
+
+$cart_items = [];
+$total_price = 0;
+
+while ($row = $result->fetch_assoc()) {
+    $cart_items[] = $row;
+    $total_price += $row['price'] * $row['quantity'];
+}
+
+$original_total = $total_price;
+
+if (isset($_SESSION['coupon_discount'])) {
+    $coupon_discount = $_SESSION['coupon_discount'];
+
+    if ($coupon_discount > 0) {
+        $discount_amount = ($total_price * $coupon_discount) / 100;
+        $total_price = $total_price - $discount_amount;
+    }
+}
+
+$total_price = number_format($total_price, 2);
+?>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>My Cart - Agro Farm</title>
+
+<style>
+body {
+    background: #f4f6f8;
+    font-family: "Segoe UI", sans-serif;
+    margin: 0;
+}
+
+header {
+    background: #1b8f3b;
+    padding: 18px;
+    text-align: center;
+    color: white;
+    font-size: 26px;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+nav {
+    background: #157a30;
+    padding: 10px 0;
+}
+
+nav ul {
+    display: flex;
+    justify-content: center;
+    list-style: none;
+    padding: 0;
+}
+
+nav ul li {
+    margin: 0 20px;
+}
+
+nav ul li a {
+    color: white;
+    font-size: 17px;
+    font-weight: bold;
+    text-decoration: none;
+    transition: 0.3s;
+}
+
+nav ul li a:hover {
+    opacity: 0.7;
+}
+
+.tabs {
+    display: flex;
+    justify-content: center;
+    margin: 25px 0;
+}
+
+.tab-button {
+    background: #1b8f3b;
+    color: white;
+    border: none;
+    padding: 12px 30px;
+    font-size: 16px;
+    border-radius: 8px;
+    margin: 0 10px;
+    cursor: pointer;
+    transition: 0.3s;
+}
+
+.tab-button.active {
+    background: #146328;
+}
+
+.tab-button:hover {
+    background: #146328;
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+.cart-items {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 25px;
+}
+
+.cart-item {
+    width: 260px;
+    background: white;
+    border-radius: 12px;
+    padding: 18px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+    text-align: center;
+}
+
+.cart-item img {
+    width: 100%;
+    height: 160px;
+    border-radius: 10px;
+    object-fit: cover;
+}
+
+.cart-item h3 {
+    margin: 10px 0 5px;
+}
+
+.cart-total {
+    font-size: 24px;
+    font-weight: bold;
+    color: #d02323;
+    text-align: center;
+    border: 3px solid #d02323;
+    padding: 16px 40px;
+    background: white;
+    border-radius: 12px;
+    margin: 30px auto;
+    width: fit-content;
+}
+
+#checkout-form {
+    width: 55%;
+    background: white;
+    padding: 30px;
+    border-radius: 12px;
+    margin: 20px auto;
+    box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+}
+
+#checkout-form input,
+#checkout-form textarea {
+    width: 100%;
+    padding: 15px;
+    margin-top: 12px;
+    border-radius: 8px;
+    border: 1px solid #ccc;
+    font-size: 15px;
+}
+
+/* Payment Options with Logos */
+.payment-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0;
+    background: #f8f8f8;
+    padding: 10px 12px;
+    border-radius: 10px;
+    border: 1px solid #ddd;
+    cursor: pointer;
+}
+
+.payment-option:hover {
+    background: #eee;
+}
+
+.payment-option img {
+    height: 30px;
+    display: inline-block;
+}
+
+button[type="submit"] {
+    background: #1b8f3b;
+    padding: 15px;
+    font-size: 18px;
+    width: 100%;
+    border-radius: 10px;
+    border: none;
+    color: white;
+    cursor: pointer;
+    margin-top: 18px;
+}
+
+button[type="submit"]:hover {
+    background: #146328;
+}
+
+/* Remove Button */
+.remove-btn{
+    display:inline-block;
+    margin-top:12px;
+    padding:10px 16px;
+    background:#d62828;
+    color:white;
+    text-decoration:none;
+    border-radius:8px;
+    font-weight:bold;
+    transition:0.3s;
+}
+
+.remove-btn:hover{
+    background:#a4161a;
+}
+
+/* Coupon Box */
+.coupon-box{
+    width:fit-content;
+    margin:20px auto;
+    background:white;
+    padding:20px;
+    border-radius:12px;
+    box-shadow:0 4px 12px rgba(0,0,0,0.08);
+    text-align:center;
+}
+
+.coupon-box input{
+    padding:12px;
+    width:220px;
+    border:1px solid #ccc;
+    border-radius:8px;
+    font-size:15px;
+}
+
+.coupon-box button{
+    padding:12px 18px;
+    border:none;
+    background:#1b8f3b;
+    color:white;
+    border-radius:8px;
+    cursor:pointer;
+    font-weight:bold;
+}
+
+.coupon-box button:hover{
+    background:#146328;
+}
+
+.discount-text{
+    text-align:center;
+    color:#1b8f3b;
+    font-size:18px;
+    margin-top:10px;
+    font-weight:bold;
+}
+</style>
+</head>
+
+<body>
+
+<header>Agro Farm Marketplace</header>
+
+<nav>
+    <ul>
+        <li><a href="home.php">Home</a></li>
+        <li><a href="marketplace.php">Marketplace</a></li>
+        <li><a href="cart.php">My Cart</a></li>
+        <li><a href="main.php?logout=true">Logout</a></li>
+    </ul>
+</nav>
+
+<h2 style="text-align:center;">My Cart</h2>
+
+<?php
+if ($error) echo "<p style='color:red;text-align:center;'>$error</p>";
+if ($success) echo "<p style='color:green;text-align:center;'>$success</p>";
+?>
+
+<div class="tabs">
+    <button class="tab-button active" onclick="openTab('cart-tab')">🛒 Cart</button>
+    <button class="tab-button" onclick="openTab('checkout-tab')">💳 Checkout</button>
+</div>
+
+<!-- CART TAB -->
+<div id="cart-tab" class="tab-content active">
+
+    <?php if ($cart_items): ?>
+
+        <div class="cart-items">
+
+            <?php foreach($cart_items as $item): ?>
+
+                <div class="cart-item">
+
+                    <img src="uploads/<?php echo $item['product_image']; ?>">
+
+                    <h3><?php echo $item['product_name']; ?></h3>
+
+                    <p>Price: ৳<?php echo $item['price']; ?></p>
+
+                    <p>Quantity: <?php echo $item['quantity']; ?></p>
+
+                    <p>
+                        <b>
+                            Subtotal: ৳<?php echo $item['price'] * $item['quantity']; ?>
+                        </b>
+                    </p>
+
+                    <a href="cart.php?remove=<?php echo $item['product_id']; ?>" 
+                       class="remove-btn"
+                       onclick="return confirm('Remove this product?')">
+                       ✖ Remove
+                    </a>
+
+                </div>
+
+            <?php endforeach; ?>
+
+        </div>
+
+        <!-- Coupon Section -->
+        <div class="coupon-box">
+
+            <form method="post">
+
+                <input type="text" name="coupon_code" placeholder="Enter coupon code">
+
+                <button type="submit" name="apply_coupon">
+                    Apply Coupon
+                </button>
+
+            </form>
+
+            <?php if($coupon_message): ?>
+
+                <p class="discount-text">
+                    <?php echo $coupon_message; ?>
+                </p>
+
+            <?php endif; ?>
+
+            <?php if($coupon_discount > 0): ?>
+
+                <p class="discount-text">
+                    Coupon Applied:
+                    <?php echo $_SESSION['coupon_name']; ?>
+                    (<?php echo $coupon_discount; ?>% OFF)
+                </p>
+
+                <p style="text-align:center;font-size:18px;">
+                    Original Total:
+                    <del>৳<?php echo number_format($original_total,2); ?></del>
+                </p>
+
+            <?php endif; ?>
+
+        </div>
+
+        <div class="cart-total">
+            Total: ৳<?php echo $total_price; ?>
+        </div>
+
+    <?php else: ?>
+
+        <p style="text-align:center;">Your cart is empty.</p>
+
+    <?php endif; ?>
+
+</div>
+
+<!-- CHECKOUT TAB -->
+<div id="checkout-tab" class="tab-content">
+
+<?php if ($cart_items): ?>
+
+<form method="post" id="checkout-form">
+
+    <h3>Delivery Information</h3>
+
+    <textarea name="delivery_address" required placeholder="Enter your delivery address"></textarea>
+
+    <input type="text" 
+           name="phone_number" 
+           required 
+           placeholder="Phone number (11 digits)" 
+           pattern="[0-9]{11}">
+
+    <h3>Payment Method</h3>
+
+    <label class="payment-option">
+        <input type="radio" 
+               name="payment_method" 
+               value="bkash" 
+               onclick="showPaymentNumber(this.value)">
+        <b>bKash</b>
+    </label>
+
+    <label class="payment-option">
+        <input type="radio" 
+               name="payment_method" 
+               value="nagad" 
+               onclick="showPaymentNumber(this.value)">
+        <b>Nagad</b>
+    </label>
+
+    <label class="payment-option">
+        <input type="radio" 
+               name="payment_method" 
+               value="rocket" 
+               onclick="showPaymentNumber(this.value)">
+        <b>Rocket</b>
+    </label>
+
+    <div id="payment-number" 
+         style="text-align:center;color:#c21e1e;font-size:18px;margin-top:10px;">
+    </div>
+
+    <input type="text" 
+           name="trx_id" 
+           required 
+           placeholder="Transaction ID">
+
+    <?php foreach($cart_items as $item): ?>
+
+        <input type="hidden" 
+               name="product_ids[]" 
+               value="<?php echo $item['product_id']; ?>">
+
+        <input type="hidden" 
+               name="quantity[<?php echo $item['product_id']; ?>]" 
+               value="<?php echo $item['quantity']; ?>">
+
+    <?php endforeach; ?>
+
+    <button type="submit" name="confirm_order">
+        Confirm Order
+    </button>
+
+</form>
+
+<?php else: ?>
+
+<p style="text-align:center;">Add items to your cart first.</p>
+
+<?php endif; ?>
+
+</div>
+
+<script>
+function openTab(tabId) {
+
+    document.querySelectorAll('.tab-content')
+    .forEach(t => t.classList.remove('active'));
+
+    document.getElementById(tabId)
+    .classList.add('active');
+
+    document.querySelectorAll('.tab-button')
+    .forEach(btn => btn.classList.remove('active'));
+
+    event.currentTarget.classList.add('active');
+}
+
+function showPaymentNumber(method){
+
+    let text = "";
+
+    if(method === "bkash")
+        text = "Send to bKash: 01745985077";
+
+    if(method === "nagad")
+        text = "Send to Nagad: 01313731493";
+
+    if(method === "rocket")
+        text = "Send to Rocket: 01745985077";
+
+    document.getElementById("payment-number").innerHTML = text;
+}
+</script>
+
+</body>
+</html>
+
+
+
+
+
+
+
+
